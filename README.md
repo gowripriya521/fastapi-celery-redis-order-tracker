@@ -57,28 +57,21 @@ dispatch, and delayed customer engagement.
 
 ### High-level system architecture
 
-``` mermaid
+```mermaid
 flowchart LR
-    Customer[Customer / API Client]
-    API[FastAPI Application<br/>Producer]
-    Broker[(Redis DB 0<br/>Celery Message Broker)]
-    Worker[Celery Worker<br/>Consumer]
-    Backend[(Redis DB 1<br/>Task Result Backend)]
+    Customer["Customer / API Client"]
+    API["FastAPI Application"]
+    Broker[("Redis DB 0<br/>Celery Broker")]
+    Worker["Celery Worker"]
+    Backend[("Redis DB 1<br/>Result Backend")]
 
-    Customer -->|POST /orders| API
-    API -->|Enqueue workflow| Broker
-    API -->|Order ID + Task ID| Customer
-    Broker -->|Queued task| Worker
-    Worker -->|Update task state and result| Backend
-    Customer -->|GET /orders/task_id| API
-    API -->|Read AsyncResult| Backend
-
-    subgraph Containers[Docker deployment layer]
-      API
-      Broker
-      Worker
-      Backend
-    end
+    Customer -->|"1. POST /orders"| API
+    API -->|"2. Enqueue workflow"| Broker
+    Broker -->|"3. Deliver task"| Worker
+    Worker -->|"4. Store progress and results"| Backend
+    API -->|"5. Read task status"| Backend
+    Backend -->|"Return task state"| API
+    API -->|"6. Return order receipt or status"| Customer
 ```
 
 **Component responsibilities**
@@ -111,38 +104,43 @@ flowchart LR
 The workflow uses Celery Canvas primitives to combine sequential steps
 with parallel work.
 
-``` mermaid
+```mermaid
 flowchart TD
-    A[Customer submits POST /orders] --> B[FastAPI validates order]
-    B --> C[Generate order_id and task_id]
-    C --> D[Submit Celery workflow to Redis]
-    D --> E[Return order receipt immediately]
+    Start["Customer submits POST /orders"]
+    Validate["FastAPI validates the order"]
+    IDs["Generate order ID and task ID"]
+    Queue["Submit workflow to Redis"]
+    Response["Return order receipt"]
 
-    D --> F[Celery workflow starts]
-    F --> G[process_payment]
-    G -->|Temporary failure| H[Retry after 3 seconds<br/>up to 3 retries]
-    H --> G
-    G -->|Payment successful| I[group: prepare_item tasks]
+    Start --> Validate --> IDs --> Queue --> Response
 
-    I --> J[Prepare food item 1]
-    I --> K[Prepare food item 2]
-    I --> L[Prepare food item N]
+    Queue --> Payment["process_payment"]
 
-    J --> M{All preparation tasks complete?}
-    K --> M
-    L --> M
-    M -->|Yes: chord callback| N[pack_order]
-    N --> O[dispatch_delivery]
-    O --> P[Schedule feedback task<br/>15 seconds later]
-    P --> Q[send_feedback_email]
+    Payment -->|"Temporary failure"| Retry["Retry after 3 seconds<br/>Maximum 3 retries"]
+    Retry --> Payment
+    Payment -->|"Payment successful"| Group["Prepare food items in parallel"]
 
-    G -. task state .-> R[(Redis result backend)]
-    J -. task state .-> R
-    K -. task state .-> R
-    L -. task state .-> R
-    N -. task result .-> R
-    O -. task result .-> R
-    Q -. task result .-> R
+    Group --> Item1["Prepare item 1"]
+    Group --> Item2["Prepare item 2"]
+    Group --> ItemN["Prepare item N"]
+
+    Item1 --> Wait{"All preparation tasks complete?"}
+    Item2 --> Wait
+    ItemN --> Wait
+
+    Wait -->|"Yes"| Pack["pack_order"]
+    Pack --> Dispatch["dispatch_delivery"]
+    Dispatch --> Schedule["Schedule feedback email<br/>15 seconds later"]
+    Schedule --> Feedback["send_feedback_email"]
+
+    Backend[("Redis result backend")]
+    Payment -. "Task state" .-> Backend
+    Item1 -. "Task state" .-> Backend
+    Item2 -. "Task state" .-> Backend
+    ItemN -. "Task state" .-> Backend
+    Pack -. "Task result" .-> Backend
+    Dispatch -. "Task result" .-> Backend
+    Feedback -. "Task result" .-> Backend
 ```
 
 ## Order Processing Workflow
@@ -218,7 +216,7 @@ flowchart TD
 
 Redis is configured with two logical databases:
 
-``` text
+```text
 redis://localhost:6379/0  # Celery message broker
 redis://localhost:6379/1  # Celery result backend
 ```
@@ -227,7 +225,7 @@ redis://localhost:6379/1  # Celery result backend
 
 ### 1. Clone the repository
 
-``` bash
+```bash
 git clone <YOUR_REPOSITORY_URL>
 cd <YOUR_PROJECT_DIRECTORY>
 ```
@@ -239,21 +237,21 @@ directory.
 
 **Windows PowerShell**
 
-``` powershell
+```powershell
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 ```
 
 **macOS / Linux**
 
-``` bash
+```bash
 python3 -m venv venv
 source venv/bin/activate
 ```
 
 ### 3. Install dependencies
 
-``` bash
+```bash
 pip install fastapi uvicorn celery redis
 ```
 
@@ -266,7 +264,7 @@ The application expects the broker and result backend URLs shown above.
 
 Open a terminal in the project root and run:
 
-``` bash
+```bash
 celery -A tasks worker --loglevel=info --pool=threads --concurrency=4 -n worker1@%h
 ```
 
@@ -277,7 +275,7 @@ Windows-compatible worker execution.
 
 Open another terminal and run:
 
-``` bash
+```bash
 uvicorn main:api --reload
 ```
 
@@ -288,7 +286,7 @@ The command assumes the FastAPI application instance is named `api` in
 
 Visit:
 
-``` text
+```text
 http://127.0.0.1:8000/docs
 ```
 
@@ -316,7 +314,7 @@ Use the interactive Swagger UI to submit an order and check its status.
 
 Request body:
 
-``` json
+```json
 {
   "customer_email": "rahul@example.com",
   "items": [
@@ -330,7 +328,7 @@ Request body:
 
 Example immediate response:
 
-``` json
+```json
 {
   "order_id": "ORD-A1B2C3",
   "task_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
@@ -349,7 +347,7 @@ Use the `task_id` returned by `POST /orders`.
 
 Example in-progress response:
 
-``` json
+```json
 {
   "task_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   "state": "PENDING",
@@ -359,7 +357,7 @@ Example in-progress response:
 
 Example successful response:
 
-``` json
+```json
 {
   "task_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
   "state": "SUCCESS",
@@ -378,7 +376,7 @@ your implementation.
 
 Submit an order:
 
-``` bash
+```bash
 curl -X POST "http://127.0.0.1:8000/orders" \
   -H "Content-Type: application/json" \
   -d '{
@@ -390,7 +388,7 @@ curl -X POST "http://127.0.0.1:8000/orders" \
 
 Check its status (replace the task ID):
 
-``` bash
+```bash
 curl "http://127.0.0.1:8000/orders/<TASK_ID>"
 ```
 
@@ -460,7 +458,7 @@ appropriate only after a working Compose configuration has been added.
 The exact file layout depends on your repository. A possible
 organization is:
 
-``` text
+```text
 food-order-tracker/
 ├── main.py              # FastAPI application and order endpoints
 ├── tasks.py             # Celery app and background task definitions
