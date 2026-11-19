@@ -519,7 +519,6 @@ star.**
 
 
 
-
 # 🍕 Food Order Tracker | FastAPI, Celery, Redis & Docker
 
 [![Python](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
@@ -573,26 +572,40 @@ The background workflow includes payment processing with retries, parallel food 
 ### High-level system architecture
 
 ```mermaid
-flowchart LR
-    classDef client fill:#FFB74D,stroke:#F57C00,stroke-width:2px,color:#fff;
-    classDef api fill:#009688,stroke:#00796B,stroke-width:2px,color:#fff;
-    classDef broker fill:#DC382D,stroke:#B71C1C,stroke-width:2px,color:#fff;
-    classDef worker fill:#37814A,stroke:#2E7D32,stroke-width:2px,color:#fff;
-    classDef backend fill:#E53935,stroke:#C62828,stroke-width:2px,color:#fff;
+%%{init: {'theme': 'dark', 'themeVariables': { 'darkMode': true, 'background': '#0d1117', 'lineColor': '#38bdf8', 'textColor': '#f8fafc', 'clusterBkg': '#161b22', 'clusterBorder': '#30363d' }}}%%
+flowchart TD
+    classDef clientBox fill:#0c2d48,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff,rx:8,ry:8;
+    classDef gatewayBox fill:#082f49,stroke:#06b6d4,stroke-width:2px,color:#ecfeff,rx:8,ry:8;
+    classDef brokerBox fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#eef2ff,rx:8,ry:8;
+    classDef workerBox fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ecfdf5,rx:8,ry:8;
+    classDef resultBox fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fffbeb,rx:8,ry:8;
 
-    Customer["👤 Customer / API Client"]:::client
-    API["⚡ FastAPI Application"]:::api
-    Broker[("🗄️ Redis DB 0<br/>Celery Broker")]:::broker
-    Worker["⚙️ Celery Worker"]:::worker
-    Backend[("💾 Redis DB 1<br/>Result Backend")]:::backend
+    subgraph ClientLayer ["🌐 Client Layer"]
+        Customer["👤 Customer / API Client<br/>• Submits Order JSON<br/>• Polls Tracking Status"]:::clientBox
+    end
 
-    Customer -->|"1. POST /orders"| API
-    API -->|"2. Enqueue workflow"| Broker
-    Broker -->|"3. Deliver task"| Worker
-    Worker -->|"4. Store progress and results"| Backend
-    API -->|"5. Read task status"| Backend
-    Backend -->|"Return task state"| API
-    API -->|"6. Return order receipt or status"| Customer
+    subgraph IngestionGateway ["⚡ Ingestion Gateway"]
+        API["🚀 FastAPI Application<br/>• Pydantic Payload Validation<br/>• Generates ORD & Task IDs<br/>• Non-Blocking Dispatcher"]:::gatewayBox
+    end
+
+    subgraph MessageBroker ["📦 Message Broker & Queue"]
+        Broker[("⚡ Redis DB 0<br/>• Celery Message Broker<br/>• Task Queue & Signatures")]:::brokerBox
+    end
+
+    subgraph AsyncExecution ["⚙️ Async Execution Engine"]
+        Worker["🧵 Celery Workers<br/>• Thread Pool (--concurrency=4)<br/>• Canvas Workflow Runner"]:::workerBox
+    end
+
+    subgraph ResultStorage ["💾 State & Result Backend"]
+        Backend[("🗄️ Redis DB 1<br/>• Task Lifecycle States<br/>• Final Delivery Payloads")]:::resultBox
+    end
+
+    Customer -->|"1. HTTP POST /orders"| API
+    API -->|"2. Enqueue Canvas Workflow"| Broker
+    Broker -->|"3. Consume Task"| Worker
+    Worker -->|"4. Persist State & Result"| Backend
+    API <-->|"5. Poll AsyncResult(task_id)"| Backend
+    API -->|"6. Return Receipt / Status"| Customer
 ```
 
 **Component responsibilities**
@@ -605,53 +618,68 @@ flowchart LR
 | **Redis DB 1** | Acts as the Celery result backend for task states and final results. |
 | **Docker** | Provides a containerization layer for packaging and running the application services. |
 
+---
+
 ### Detailed order-processing flow
 
 The workflow uses Celery Canvas primitives to combine sequential steps with parallel work.
 
 ```mermaid
+%%{init: {'theme': 'dark', 'themeVariables': { 'darkMode': true, 'background': '#0d1117', 'lineColor': '#38bdf8', 'textColor': '#f8fafc', 'clusterBkg': '#161b22', 'clusterBorder': '#30363d' }}}%%
 flowchart TD
-    classDef step fill:#E0F7FA,stroke:#00ACC1,stroke-width:2px,color:#006064;
-    classDef payment fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px,color:#F57F17;
-    classDef groupTask fill:#E8F5E9,stroke:#43A047,stroke-width:2px,color:#1B5E20;
-    classDef action fill:#EDE7F6,stroke:#7E57C2,stroke-width:2px,color:#311B92;
-    classDef db fill:#FFEBEE,stroke:#E53935,stroke-width:2px,color:#B71C1C;
+    classDef gateway fill:#082f49,stroke:#06b6d4,stroke-width:2px,color:#ecfeff,rx:8,ry:8;
+    classDef payment fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#faf5ff,rx:8,ry:8;
+    classDef parallel fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ecfdf5,rx:8,ry:8;
+    classDef pipeline fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#eef2ff,rx:8,ry:8;
+    classDef storage fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fffbeb,rx:8,ry:8;
 
-    Start["Customer submits POST /orders"]:::step
-    Validate["FastAPI validates the order"]:::step
-    IDs["Generate order ID and task ID"]:::step
-    Queue["Submit workflow to Redis"]:::step
-    Response["Return order receipt (<100ms)"]:::step
+    subgraph API_Layer ["⚡ FastAPI Non-Blocking Ingestion (<100ms)"]
+        Start["Customer submits POST /orders"]:::gateway
+        Validate["Validate Payload & Generate IDs"]:::gateway
+        Response["Return Immediate Order Receipt"]:::gateway
+        Start --> Validate --> Response
+    end
 
-    Start --> Validate --> IDs --> Queue --> Response
+    subgraph Payment_Stage ["💳 Fault-Tolerant Payment"]
+        Payment["process_payment<br/>• Charges Customer Gateway"]:::payment
+        Retry["🔄 self.retry(countdown=3)<br/>• Max 3 Retries"]:::payment
+        Payment -->|"Transient Failure"| Retry
+        Retry --> Payment
+    end
 
-    Queue --> Payment["💳 process_payment"]:::payment
+    subgraph Kitchen_Chord ["👨‍🍳 Parallel Fan-Out & Synchronization (chord)"]
+        Group["group() Parallel Fan-Out"]:::parallel
+        Item1["🍕 prepare_item 1"]:::parallel
+        Item2["🥖 prepare_item 2"]:::parallel
+        ItemN["☕ prepare_item N"]:::parallel
+        Wait{"⏱️ Chord Barrier<br/>All items cooked?"}:::parallel
 
-    Payment -->|"Temporary failure"| Retry["🔄 Retry after 3 seconds<br/>Maximum 3 retries"]:::payment
-    Retry --> Payment
-    Payment -->|"Payment successful"| Group["👨‍🍳 Prepare food items in parallel"]:::groupTask
+        Group --> Item1 & Item2 & ItemN
+        Item1 & Item2 & ItemN --> Wait
+    end
 
-    Group --> Item1["🍕 Prepare item 1"]:::groupTask
-    Group --> Item2["🥖 Prepare item 2"]:::groupTask
-    Group --> ItemN["☕ Prepare item N"]:::groupTask
+    subgraph Fulfillment_Chain ["🛵 Sequential Delivery & Engagement (chain)"]
+        Pack["📦 pack_order<br/>• Aggregates Cooked Items"]:::pipeline
+        Dispatch["🛵 dispatch_delivery<br/>• Hands off to Courier"]:::pipeline
+        Schedule["⏳ apply_async(countdown=15)<br/>• Non-Blocking Delay"]:::pipeline
+        Feedback["✉️ send_feedback_email<br/>• Post-Delivery Follow-up"]:::pipeline
 
-    Item1 --> Wait{"⏱️ All preparation tasks complete?"}:::groupTask
-    Item2 --> Wait
-    ItemN --> Wait
+        Pack --> Dispatch --> Schedule --> Feedback
+    end
 
-    Wait -->|"Yes"| Pack["📦 pack_order"]:::action
-    Pack --> Dispatch["🛵 dispatch_delivery"]:::action
-    Dispatch --> Schedule["⏳ Schedule feedback email<br/>15 seconds later"]:::action
-    Schedule --> Feedback["✉️ send_feedback_email"]:::action
+    Backend[("🗄️ Redis DB 1 Result Backend")]:::storage
 
-    Backend[("💾 Redis result backend")]:::db
-    Payment -. "Task state" .-> Backend
-    Item1 -. "Task state" .-> Backend
-    Item2 -. "Task state" .-> Backend
-    ItemN -. "Task state" .-> Backend
-    Pack -. "Task result" .-> Backend
-    Dispatch -. "Task result" .-> Backend
-    Feedback -. "Task result" .-> Backend
+    Validate -->|"Enqueue Workflow"| Payment
+    Payment -->|"Payment Success"| Group
+    Wait -->|"Yes"| Pack
+
+    Payment -. "State" .-> Backend
+    Item1 -. "State" .-> Backend
+    Item2 -. "State" .-> Backend
+    ItemN -. "State" .-> Backend
+    Pack -. "Result" .-> Backend
+    Dispatch -. "Result" .-> Backend
+    Feedback -. "Result" .-> Backend
 ```
 
 ---
@@ -659,7 +687,7 @@ flowchart TD
 ## 🔄 Order Processing Workflow
 
 | Stage | Task | What happens |
-| :---: | :--- | :--- |
+| :--- | :--- | :--- |
 | **1** | `process_payment` | Processes payment and retries transient failures after a 3-second countdown, up to 3 retries. |
 | **2** | `prepare_item` | Prepares each food item as an independent task, allowing parallel execution across threads. |
 | **3** | `pack_order` | Waits for all preparation tasks (`chord` callback) and aggregates their outputs into a packed order. |
@@ -952,7 +980,7 @@ By building this project, you can practice:
 - Add structured logging and health-check endpoints.
 - Add Docker Compose configuration with health checks and service dependencies.
 - Add automated unit and integration tests for API endpoints and Celery tasks.
-- Add monitoring and metrics (e.g., Flower or Prometheus) for queue length, task duration, and worker health.
+- Add monitoring and metrics (e.g., Flower or Prometheus) for queue length, task duration, retries, and worker health.
 
 ---
 
