@@ -424,7 +424,7 @@ By building this project, you can practice:
 ## Keywords
 
 `Food Order Tracking System` · `FastAPI Project` · `Python Backend Project` · `Celery Task Queue` · `Redis Message Broker` · `Redis Result Backend` · `Asynchronous Processing` · `Background Tasks` · `Distributed Task Processing` · `Celery Canvas` · `Parallel Task Execution` · `Dockerized Python Application` · `REST API` · `Microservices Architecture`
-
+ 
 ⭐ **If you find this project useful, consider giving the repository a star!**
 
 
