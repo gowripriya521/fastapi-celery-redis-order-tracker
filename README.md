@@ -4,7 +4,7 @@ A **distributed, asynchronous food order tracking system** built with **Python, 
 
 > **Project focus:** asynchronous task processing, distributed task queues, parallel execution, workflow orchestration, retries, and background job status tracking.
 
-## Table of Contents
+## Table of Contents    
 
 * [Overview](#overview)
 * [Architecture](#architecture)
